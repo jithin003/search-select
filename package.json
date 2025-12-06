@@ -32,11 +32,11 @@
     "multiselect",
     "component"
   ],
-  "author": "",
+  "author": "jithin003",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "https://github.com/jithin003/search-select.git"
   },
   "dependencies": {
     "vue": "^3.5.24"
