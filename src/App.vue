@@ -4,7 +4,10 @@ import SearchSelect from './components/SearchSelect.vue';
 
 // Basic Options
 const selectedValue = ref('');
-const selectedMulti = ref([]);
+const selectedClearable = ref('');
+const selectedFruit = ref('');
+const selectedNoResults = ref('');
+const selectedMulti = ref<string[]>([]);
 
 const frameworks = [
   { label: 'Vue.js', value: 'vue', category: 'Frontend' },
@@ -40,10 +43,10 @@ const handleSearch = async (query: string) => {
 };
 
 // Multi-select with checkboxes
-const selectedWithCheckbox = ref([]);
+const selectedWithCheckbox = ref<string[]>([]);
 
 // Hide Selected
-const selectedHidden = ref([]);
+const selectedHidden = ref<string[]>([]);
 
 // Opt-out example
 const selectedOptOut = ref('');
@@ -74,12 +77,12 @@ const selectedCustom = ref('');
       <section>
         <h3 style="margin-bottom: 10px;">✕ Clearable Select</h3>
         <SearchSelect 
-          v-model="selectedValue" 
+          v-model="selectedClearable" 
           :options="frameworks"
           placeholder="Choose a framework..."
           clearable
         />
-        <p style="margin-top: 8px; color: #666; font-size: 14px;">Selected: <strong>{{ selectedValue || 'None' }}</strong></p>
+        <p style="margin-top: 8px; color: #666; font-size: 14px;">Selected: <strong>{{ selectedClearable || 'None' }}</strong></p>
       </section>
 
       <!-- Multi-select with Checkboxes (Left) -->
@@ -179,19 +182,19 @@ const selectedCustom = ref('');
       <section>
         <h3 style="margin-bottom: 10px;">🍎 Simple Array (Strings)</h3>
         <SearchSelect 
-          v-model="selectedValue" 
+          v-model="selectedFruit" 
           :options="simpleOptions"
           placeholder="Choose a fruit..."
           clearable
         />
-        <p style="margin-top: 8px; color: #666; font-size: 14px;">Selected: <strong>{{ selectedValue || 'None' }}</strong></p>
+        <p style="margin-top: 8px; color: #666; font-size: 14px;">Selected: <strong>{{ selectedFruit || 'None' }}</strong></p>
       </section>
 
       <!-- Custom No Results -->
       <section>
         <h3 style="margin-bottom: 10px;">🔍 Custom "No Results" Message</h3>
         <SearchSelect 
-          v-model="selectedValue" 
+          v-model="selectedNoResults" 
           :options="frameworks"
           placeholder="Try searching for 'xyz'..."
         >
