@@ -20,6 +20,12 @@ A versatile, feature-rich search-select component for **Vue 3** and **Nuxt 3**.
 npm install search-select-vue
 ```
 
+`vue` (3.5 or newer) is a peer dependency. Import the stylesheet once, for example in your app entry:
+
+```ts
+import 'search-select-vue/style.css';
+```
+
 ## 🚀 Basic Usage
 
 ### Vue 3
@@ -28,6 +34,7 @@ npm install search-select-vue
 <script setup>
 import { ref } from 'vue';
 import { SearchSelect } from 'search-select-vue';
+import 'search-select-vue/style.css';
 
 const selected = ref('');
 const options = [
@@ -49,6 +56,7 @@ Create a plugin file:
 ```typescript
 // plugins/search-select.ts
 import SearchSelect from 'search-select-vue';
+import 'search-select-vue/style.css';
 
 export default defineNuxtPlugin((nuxtApp) => {
   nuxtApp.vueApp.component('SearchSelect', SearchSelect);
@@ -83,7 +91,7 @@ Then use it in your components:
 | `optOut` | `Array<any>` | `[]` | Values to exclude from options |
 | `clearable` | `Boolean` | `false` | Show clear button |
 | `closeOnSelect` | `Boolean` | `true` | Close dropdown after selection |
-| `reduce` | `Function` | - | Transform selected value |
+| `reduce` | `Function` | - | Map an option to the value stored in `v-model` (used for selection checks too) |
 
 ## 🎯 Events
 
@@ -102,6 +110,7 @@ Customize how each option is rendered.
 **Scope:**
 - `option` - The option object
 - `selected` - Boolean indicating if option is selected
+- `active` - Boolean indicating if option is highlighted (keyboard or mouse)
 
 ```vue
 <SearchSelect v-model="selected" :options="options">
@@ -135,6 +144,19 @@ Customize the loading state.
   </template>
 </SearchSelect>
 ```
+
+## ⌨️ Keyboard
+
+| Key | Action |
+|-----|--------|
+| `↓` / `↑` | Open the dropdown, then move the highlight |
+| `Enter` | Open, or select the highlighted option |
+| `Space` | Same as `Enter` when the search input isn't focused |
+| `Home` / `End` | Jump to the first / last option (when the search input isn't focused) |
+| `Escape` | Close the dropdown |
+| `Tab` | Close the dropdown and move focus on |
+
+The component uses the WAI-ARIA combobox / listbox pattern (`aria-expanded`, `aria-activedescendant`, `aria-selected`), so screen readers announce the highlighted option.
 
 ## 💡 Examples
 
@@ -220,7 +242,28 @@ const handleSearch = async (query) => {
 
 ## 🎨 Styling
 
-The component comes with default styles. You can override them using CSS variables or by targeting the component classes:
+The component comes with default styles (`search-select-vue/style.css`). Tweak them with CSS variables:
+
+```css
+.search-select {
+  --ss-font-family: inherit;
+  --ss-border-color: #ccc;
+  --ss-border-radius: 4px;
+  --ss-background: white;
+  --ss-focus-color: #007bff;
+  --ss-focus-ring: rgba(0, 123, 255, 0.25);
+  --ss-placeholder-color: #757575;
+  --ss-muted-color: #666;
+  --ss-dropdown-max-height: 200px;
+  --ss-dropdown-z-index: 1000;
+  --ss-option-active-background: #f0f0f0;
+  --ss-option-selected-background: #e6f7ff;
+  --ss-option-selected-color: #0062cc;
+  --ss-option-selected-active-background: #cceeff;
+}
+```
+
+Or target the component classes:
 
 ```css
 .search-select-control {
@@ -238,6 +281,15 @@ The component comes with default styles. You can override them using CSS variabl
 .search-select-option.is-selected {
   /* Customize selected items */
 }
+```
+
+## 🛠️ Development
+
+```bash
+npm install
+npm run dev     # demo app
+npm test        # unit tests (Vitest)
+npm run build   # library build + type declarations
 ```
 
 ## 📄 License

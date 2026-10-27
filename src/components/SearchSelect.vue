@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
+import { computed, nextTick, ref, watch, onMounted, onUnmounted, useId } from 'vue';
 
 const props = withDefaults(defineProps<{
-  options: any[];
+  options?: any[];
   modelValue?: any;
   multiple?: boolean;
   searchable?: boolean;
@@ -47,42 +47,61 @@ const emit = defineEmits<{
 // State
 const isOpen = ref(false);
 const searchQuery = ref('');
+const activeIndex = ref(-1);
 const containerRef = ref<HTMLElement | null>(null);
+const controlRef = ref<HTMLElement | null>(null);
+const inputRef = ref<HTMLInputElement | null>(null);
+const listRef = ref<HTMLElement | null>(null);
+
+const uid = useId();
+const listboxId = `${uid}-listbox`;
+const optionId = (index: number) => `${uid}-option-${index}`;
 
 // Helpers
+const isObject = (item: any) => item !== null && typeof item === 'object';
+
 const getLabel = (item: any): string => {
   if (typeof props.itemLabel === 'function') {
     return props.itemLabel(item);
   }
-  return typeof item === 'object' ? item[props.itemLabel] : item;
+  return isObject(item) ? item[props.itemLabel] : item;
 };
 
 const getValue = (item: any): any => {
   if (typeof props.itemValue === 'function') {
     return props.itemValue(item);
   }
-  return typeof item === 'object' ? item[props.itemValue] : item;
+  return isObject(item) ? item[props.itemValue] : item;
 };
 
+// The value that ends up in v-model for an option (honours `reduce`)
+const getModelValue = (item: any): any => (props.reduce ? props.reduce(item) : getValue(item));
+
 // Selection Check Helpers
-const isSelected = (item: any) => {
-  const value = getValue(item);
+const selectedValues = computed(() => {
   if (props.multiple) {
-    return Array.isArray(props.modelValue) && props.modelValue.includes(value);
+    return new Set(Array.isArray(props.modelValue) ? props.modelValue : []);
   }
-  return props.modelValue === value;
-};
+  return new Set(props.modelValue === undefined || props.modelValue === null ? [] : [props.modelValue]);
+});
+
+const isSelected = (item: any) => selectedValues.value.has(getModelValue(item));
+
+// Remember the options that were selected so the label survives
+// option lists changing underneath us (e.g. remote search results).
+const knownItems = new Map<any, any>();
+watch(() => props.options, (opts) => {
+  for (const opt of opts) knownItems.set(getModelValue(opt), opt);
+}, { immediate: true });
 
 // Filtering
 const filteredOptions = computed(() => {
   let opts = props.options;
 
   // Filter out opted-out items
-  if (props.optOut && props.optOut.length > 0) {
-    opts = opts.filter(item => {
-      const value = getValue(item);
-      return !props.optOut.includes(value);
-    });
+  if (props.optOut.length > 0) {
+    const optOut = new Set(props.optOut);
+    opts = opts.filter(item => !optOut.has(getValue(item)));
   }
 
   if (props.hideSelected) {
@@ -100,15 +119,13 @@ const filteredOptions = computed(() => {
   }
 
   const query = searchQuery.value.toLowerCase();
-  return opts.filter(item => {
-    const label = String(getLabel(item)).toLowerCase();
-    return label.includes(query);
-  });
+  return opts.filter(item => String(getLabel(item)).toLowerCase().includes(query));
 });
 
 const selectOption = (item: any) => {
-  const value = props.reduce ? props.reduce(item) : getValue(item);
-  
+  const value = getModelValue(item);
+  knownItems.set(value, item);
+
   if (props.multiple) {
     const current = Array.isArray(props.modelValue) ? [...props.modelValue] : [];
     const index = current.indexOf(value);
@@ -122,21 +139,28 @@ const selectOption = (item: any) => {
     emit('update:modelValue', value);
     if (props.closeOnSelect) {
       close();
+      controlRef.value?.focus();
     }
   }
   searchQuery.value = '';
 };
 
 // Display Logic
+const hasValue = computed(() => selectedValues.value.size > 0);
+
 const displayValue = computed(() => {
   if (props.multiple) {
-    return Array.isArray(props.modelValue) && props.modelValue.length 
-      ? `${props.modelValue.length} selected` 
-      : '';
+    return hasValue.value ? `${selectedValues.value.size} selected` : '';
   }
-  const selectedItem = props.options.find(opt => getValue(opt) === props.modelValue);
-  return selectedItem ? getLabel(selectedItem) : '';
+  if (!hasValue.value) return '';
+  const selectedItem = props.options.find(opt => getModelValue(opt) === props.modelValue)
+    ?? knownItems.get(props.modelValue);
+  return selectedItem !== undefined ? String(getLabel(selectedItem)) : '';
 });
+
+const activeDescendant = computed(() =>
+  isOpen.value && activeIndex.value >= 0 ? optionId(activeIndex.value) : undefined,
+);
 
 const toggle = () => {
   if (props.disabled) return;
@@ -144,12 +168,22 @@ const toggle = () => {
 };
 
 const open = () => {
+  if (props.disabled || isOpen.value) return;
   isOpen.value = true;
+  const selectedIndex = filteredOptions.value.findIndex(isSelected);
+  activeIndex.value = selectedIndex >= 0 ? selectedIndex : (filteredOptions.value.length ? 0 : -1);
   emit('open');
+  nextTick(() => {
+    inputRef.value?.focus();
+    scrollActiveIntoView();
+  });
 };
 
 const close = () => {
+  if (!isOpen.value) return;
   isOpen.value = false;
+  activeIndex.value = -1;
+  searchQuery.value = '';
   emit('close');
 };
 
@@ -157,6 +191,77 @@ const clear = () => {
   emit('update:modelValue', props.multiple ? [] : null);
   searchQuery.value = '';
 };
+
+// Keyboard
+const scrollActiveIntoView = () => {
+  if (activeIndex.value < 0) return;
+  const el = listRef.value?.querySelectorAll<HTMLElement>('[role="option"]')[activeIndex.value];
+  el?.scrollIntoView?.({ block: 'nearest' });
+};
+
+const moveActive = (delta: number) => {
+  const count = filteredOptions.value.length;
+  if (!count) return;
+  activeIndex.value = (activeIndex.value + delta + count) % count;
+  nextTick(scrollActiveIntoView);
+};
+
+const onKeydown = (event: KeyboardEvent) => {
+  if (props.disabled) return;
+  switch (event.key) {
+    case 'ArrowDown':
+      event.preventDefault();
+      isOpen.value ? moveActive(1) : open();
+      break;
+    case 'ArrowUp':
+      event.preventDefault();
+      isOpen.value ? moveActive(-1) : open();
+      break;
+    case 'Home':
+    case 'End':
+      if (!isOpen.value || !filteredOptions.value.length) return;
+      // Leave Home/End to the text input for caret movement
+      if (event.target === inputRef.value) return;
+      event.preventDefault();
+      activeIndex.value = event.key === 'Home' ? 0 : filteredOptions.value.length - 1;
+      nextTick(scrollActiveIntoView);
+      break;
+    case 'Enter':
+      event.preventDefault();
+      if (!isOpen.value) {
+        open();
+      } else if (!props.loading && filteredOptions.value[activeIndex.value] !== undefined) {
+        selectOption(filteredOptions.value[activeIndex.value]);
+      }
+      break;
+    case ' ':
+      // Space types into the search input; elsewhere it toggles like a native select
+      if (event.target === inputRef.value) return;
+      event.preventDefault();
+      if (!isOpen.value) {
+        open();
+      } else if (filteredOptions.value[activeIndex.value] !== undefined) {
+        selectOption(filteredOptions.value[activeIndex.value]);
+      }
+      break;
+    case 'Escape':
+      if (!isOpen.value) return;
+      event.preventDefault();
+      close();
+      controlRef.value?.focus();
+      break;
+    case 'Tab':
+      close();
+      break;
+  }
+};
+
+watch(filteredOptions, (opts) => {
+  if (!isOpen.value) return;
+  if (activeIndex.value >= opts.length || activeIndex.value < 0) {
+    activeIndex.value = opts.length ? 0 : -1;
+  }
+});
 
 // Click Outside
 const handleClickOutside = (event: MouseEvent) => {
@@ -176,12 +281,32 @@ onUnmounted(() => {
 watch(searchQuery, (val) => {
   emit('search', val);
 });
+
+watch(() => props.disabled, (disabled) => {
+  if (disabled) close();
+});
 </script>
 
 <template>
-  <div ref="containerRef" class="search-select" :class="{ 'is-open': isOpen, 'is-disabled': disabled }">
+  <div
+    ref="containerRef"
+    class="search-select"
+    :class="{ 'is-open': isOpen, 'is-disabled': disabled }"
+    @keydown="onKeydown"
+  >
     <!-- Trigger -->
-    <div class="search-select-control" @click="toggle">
+    <div
+      ref="controlRef"
+      class="search-select-control"
+      :role="searchable && isOpen ? undefined : 'combobox'"
+      :tabindex="disabled || (searchable && isOpen) ? -1 : 0"
+      :aria-expanded="searchable && isOpen ? undefined : isOpen"
+      :aria-controls="searchable && isOpen ? undefined : listboxId"
+      aria-haspopup="listbox"
+      :aria-disabled="disabled || undefined"
+      :aria-activedescendant="searchable && isOpen ? undefined : activeDescendant"
+      @click="toggle"
+    >
       <div v-if="!searchable || !isOpen" class="search-select-value" :class="{ 'placeholder': !displayValue }">
         {{ displayValue || placeholder }}
       </div>
@@ -191,57 +316,81 @@ watch(searchQuery, (val) => {
         v-model="searchQuery"
         type="text"
         class="search-select-input"
-        :placeholder="placeholder"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded="true"
+        :aria-controls="listboxId"
+        :aria-activedescendant="activeDescendant"
+        autocomplete="off"
+        :placeholder="displayValue || placeholder"
         @click.stop
       />
       <div class="search-select-actions">
-        <button 
-          v-if="clearable && (displayValue || (Array.isArray(modelValue) && modelValue.length > 0))" 
+        <button
+          v-if="clearable && hasValue && !disabled"
           class="search-select-clear"
-          @click.stop="clear"
           type="button"
+          aria-label="Clear selection"
+          tabindex="-1"
+          @click.stop="clear"
         >
           ✕
         </button>
-        <span class="search-select-arrow">▼</span>
+        <span class="search-select-arrow" aria-hidden="true">▼</span>
       </div>
     </div>
 
     <!-- Dropdown -->
     <div v-if="isOpen" class="search-select-dropdown">
-      <ul class="search-select-options">
-        <li v-if="loading" class="search-select-loading">
+      <ul
+        :id="listboxId"
+        ref="listRef"
+        class="search-select-options"
+        role="listbox"
+        :aria-multiselectable="multiple || undefined"
+        :aria-busy="loading || undefined"
+      >
+        <li v-if="loading" class="search-select-loading" role="presentation">
             <slot name="loading">Loading...</slot>
         </li>
         <template v-else>
-            <li 
-            v-for="(item, index) in filteredOptions" 
+            <li
+            v-for="(item, index) in filteredOptions"
+            :id="optionId(index)"
             :key="index"
-            class="search-select-option" 
-            :class="{ 'is-selected': isSelected(item) }"
+            class="search-select-option"
+            :class="{ 'is-selected': isSelected(item), 'is-active': index === activeIndex }"
+            role="option"
+            :aria-selected="isSelected(item)"
+            @mousedown.prevent
+            @mousemove="activeIndex = index"
             @click.stop="selectOption(item)"
             >
-            <slot name="option" :option="item" :selected="isSelected(item)">
+            <slot name="option" :option="item" :selected="isSelected(item)" :active="index === activeIndex">
                 <div class="search-select-option-content" :class="{ 'has-checkbox': checkbox }">
-                  <input 
+                  <input
                     v-if="checkbox && checkboxPosition === 'left'"
                     type="checkbox"
                     :checked="isSelected(item)"
                     class="search-select-checkbox"
-                    @click.stop
+                    tabindex="-1"
+                    aria-hidden="true"
+                    @click.prevent
                   />
                   <span class="search-select-option-label">{{ getLabel(item) }}</span>
-                  <input 
+                  <input
                     v-if="checkbox && checkboxPosition === 'right'"
                     type="checkbox"
                     :checked="isSelected(item)"
                     class="search-select-checkbox"
-                    @click.stop
+                    tabindex="-1"
+                    aria-hidden="true"
+                    @click.prevent
                   />
                 </div>
             </slot>
             </li>
-            <li v-if="filteredOptions.length === 0" class="search-select-no-results">
+            <li v-if="filteredOptions.length === 0" class="search-select-no-results" role="presentation">
             <slot name="no-results">No results found</slot>
             </li>
         </template>
@@ -249,39 +398,53 @@ watch(searchQuery, (val) => {
     </div>
   </div>
 </template>
-
 <style scoped>
 .search-select {
   position: relative;
   width: 100%;
-  font-family: sans-serif;
+  font-family: var(--ss-font-family, sans-serif);
 }
 
 .search-select-control {
-  border: 1px solid #ccc;
-  border-radius: 4px;
+  border: 1px solid var(--ss-border-color, #ccc);
+  border-radius: var(--ss-border-radius, 4px);
   padding: 8px 12px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  background: white;
+  background: var(--ss-background, white);
   min-height: 40px;
+  box-sizing: border-box;
+}
+
+.search-select-control:focus-visible,
+.is-open .search-select-control {
+  outline: none;
+  border-color: var(--ss-focus-color, #007bff);
+  box-shadow: 0 0 0 2px var(--ss-focus-ring, rgba(0, 123, 255, 0.25));
 }
 
 .search-select-input {
   border: none;
   outline: none;
   width: 100%;
+  min-width: 0;
   padding: 0;
-  font-size: inherit;
+  font: inherit;
+  color: inherit;
+  background: transparent;
 }
 
 .search-select-value {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .placeholder {
-  color: #999;
+  color: var(--ss-placeholder-color, #757575);
 }
 
 .search-select-actions {
@@ -297,7 +460,7 @@ watch(searchQuery, (val) => {
   cursor: pointer;
   padding: 0;
   font-size: 14px;
-  color: #999;
+  color: #757575;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -309,12 +472,12 @@ watch(searchQuery, (val) => {
 
 .search-select-clear:hover {
   background-color: #f0f0f0;
-  color: #666;
+  color: var(--ss-muted-color, #666);
 }
 
 .search-select-arrow {
   font-size: 0.8em;
-  color: #666;
+  color: var(--ss-muted-color, #666);
   transition: transform 0.2s;
 }
 
@@ -327,12 +490,13 @@ watch(searchQuery, (val) => {
   top: 100%;
   left: 0;
   width: 100%;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  background: white;
-  z-index: 1000;
+  border: 1px solid var(--ss-border-color, #ccc);
+  border-radius: var(--ss-border-radius, 4px);
+  background: var(--ss-background, white);
+  z-index: var(--ss-dropdown-z-index, 1000);
   margin-top: 4px;
-  max-height: 200px;
+  max-height: var(--ss-dropdown-max-height, 200px);
+  box-sizing: border-box;
   overflow-y: auto;
   box-shadow: 0 4px 6px rgba(0,0,0,0.1);
 }
@@ -348,13 +512,17 @@ watch(searchQuery, (val) => {
   transition: background-color 0.15s;
 }
 
-.search-select-option:hover {
-  background-color: #f5f5f5;
+.search-select-option.is-active {
+  background-color: var(--ss-option-active-background, #f0f0f0);
 }
 
 .search-select-option.is-selected {
-  background-color: #e6f7ff;
-  color: #007bff;
+  background-color: var(--ss-option-selected-background, #e6f7ff);
+  color: var(--ss-option-selected-color, #0062cc);
+}
+
+.search-select-option.is-selected.is-active {
+  background-color: var(--ss-option-selected-active-background, #cceeff);
 }
 
 .search-select-option-content {
@@ -381,13 +549,13 @@ watch(searchQuery, (val) => {
 
 .search-select-no-results {
   padding: 8px 12px;
-  color: #999;
+  color: var(--ss-muted-color, #757575);
   text-align: center;
 }
 
 .search-select-loading {
     padding: 8px 12px;
-    color: #666;
+    color: var(--ss-muted-color, #666);
     text-align: center;
 }
 
